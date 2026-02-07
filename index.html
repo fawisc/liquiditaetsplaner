@@ -1,0 +1,1426 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Liquiditätsplaner - Engel-Apotheke</title>
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { -webkit-overflow-scrolling: touch; }
+        @media (display-mode: standalone) {
+            body { padding-top: env(safe-area-inset-top); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+const { useState, useEffect } = React;
+
+// ⚠️ WICHTIG: Ersetze diese URL mit deiner Google Apps Script Web-App URL!
+const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbxIPeWhEDaduJlvHs9QyfsW4AKEE0d1omlVIqvtWDoSKCsmpJC3MBAhcmZObMWQCqhzVw/exec';
+
+function LiquiditaetsChart({ entries, kontostand }) {
+  const groupedByDate = {};
+  [...entries].sort((a, b) => new Date(a.datum) - new Date(b.datum)).forEach(entry => {
+    if (!groupedByDate[entry.datum]) groupedByDate[entry.datum] = [];
+    groupedByDate[entry.datum].push(entry);
+  });
+  
+  const dataPoints = [];
+  let currentBalance = kontostand;
+  
+  dataPoints.push({
+    datum: new Date().toISOString().split('T')[0],
+    balance: currentBalance,
+    label: 'Heute'
+  });
+  
+  Object.keys(groupedByDate).sort().forEach(datum => {
+    const dayTotal = groupedByDate[datum].reduce((sum, e) => 
+      sum + (e.typ === 'gutschrift' ? -e.betrag : e.betrag), 0
+    );
+    currentBalance -= dayTotal;
+    dataPoints.push({
+      datum,
+      balance: currentBalance,
+      label: `${groupedByDate[datum].length} Buchung${groupedByDate[datum].length > 1 ? 'en' : ''}`
+    });
+  });
+  
+  if (dataPoints.length === 0) return null;
+  
+  const balances = dataPoints.map(d => d.balance);
+  const maxBalance = Math.max(...balances, 0, 20000);
+  const minBalance = Math.min(...balances, -120000);
+  
+  const chartHeight = 400;
+  const chartWidth = 900;
+  const padding = { left: 85, right: 40, top: 40, bottom: 75 };
+  
+  const scaleY = (value) => {
+    const range = maxBalance - minBalance;
+    return padding.top + ((maxBalance - value) / range) * (chartHeight - padding.top - padding.bottom);
+  };
+  
+  const scaleX = (index) => {
+    return padding.left + (index / (dataPoints.length - 1)) * (chartWidth - padding.left - padding.right);
+  };
+  
+  const pathData = dataPoints.map((point, index) => {
+    const x = scaleX(index);
+    const y = scaleY(point.balance);
+    return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+  }).join(' ');
+  
+  const yAxisValues = [];
+  const step = Math.ceil((maxBalance - minBalance) / 50000) * 10000;
+  for (let value = Math.floor(minBalance / step) * step; value <= maxBalance; value += step) {
+    yAxisValues.push(value);
+  }
+  
+  const formatDateShort = (dateString) => {
+    return new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit' }).format(new Date(dateString));
+  };
+  
+  const formatCurrencyShort = (value) => {
+    return value >= 1000 || value <= -1000 ? `${(value / 1000).toFixed(0)}k` : `${value.toFixed(0)}`;
+  };
+  
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+      <h3 className="text-base font-semibold text-gray-900 mb-5">Liquiditätsverlauf</h3>
+      <svg width={chartWidth} height={chartHeight} className="mx-auto">
+        <defs>
+          <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#047857" />
+            <stop offset="100%" stopColor="#059669" />
+          </linearGradient>
+        </defs>
+        <rect width={chartWidth} height={chartHeight} fill="#fafafa" />
+        
+        {yAxisValues.map(value => {
+          const y = scaleY(value);
+          return (
+            <g key={value}>
+              <line x1={padding.left} y1={y} x2={chartWidth - padding.right} y2={y} stroke="#e5e7eb" strokeWidth="1" />
+              <text x={padding.left - 10} y={y + 4} textAnchor="end" fill="#6b7280" fontSize="12" fontWeight="500">
+                {formatCurrencyShort(value)}
+              </text>
+            </g>
+          );
+        })}
+        
+        <line x1={padding.left} y1={scaleY(-120000)} x2={chartWidth - padding.right} y2={scaleY(-120000)} 
+              stroke="#dc2626" strokeWidth="2" strokeDasharray="6,3" opacity="0.7" />
+        <text x={padding.left + 6} y={scaleY(-120000) - 5} fill="#dc2626" fontSize="11" fontWeight="600">-120k</text>
+        
+        <line x1={padding.left} y1={scaleY(-100000)} x2={chartWidth - padding.right} y2={scaleY(-100000)} 
+              stroke="#f59e0b" strokeWidth="2" strokeDasharray="6,3" opacity="0.7" />
+        <text x={padding.left + 6} y={scaleY(-100000) - 5} fill="#f59e0b" fontSize="11" fontWeight="600">-100k</text>
+        
+        <line x1={padding.left} y1={scaleY(0)} x2={chartWidth - padding.right} y2={scaleY(0)} 
+              stroke="#10b981" strokeWidth="2.5" />
+        <text x={padding.left + 6} y={scaleY(0) - 5} fill="#10b981" fontSize="12" fontWeight="700">0 €</text>
+        
+        <line x1={padding.left} y1={chartHeight - padding.bottom} x2={chartWidth - padding.right} 
+              y2={chartHeight - padding.bottom} stroke="#374151" strokeWidth="1.5" />
+        <line x1={padding.left} y1={padding.top} x2={padding.left} y2={chartHeight - padding.bottom} 
+              stroke="#374151" strokeWidth="1.5" />
+        
+        {dataPoints.map((point, index) => {
+          const x = scaleX(index);
+          const showLabel = index === 0 || index === dataPoints.length - 1 || 
+                           (dataPoints.length <= 10) ||
+                           (dataPoints.length > 10 && dataPoints.length <= 20 && index % 2 === 0) ||
+                           (dataPoints.length > 20 && index % Math.ceil(dataPoints.length / 8) === 0);
+          
+          if (!showLabel) return null;
+          
+          return (
+            <g key={index}>
+              <line x1={x} y1={chartHeight - padding.bottom} x2={x} y2={chartHeight - padding.bottom + 5} 
+                    stroke="#374151" strokeWidth="1" />
+              <text x={x} y={chartHeight - padding.bottom + 20} textAnchor="middle" fill="#6b7280" 
+                    fontSize="11" fontWeight="500" transform={`rotate(-45, ${x}, ${chartHeight - padding.bottom + 20})`}>
+                {formatDateShort(point.datum)}
+              </text>
+            </g>
+          );
+        })}
+        
+        <text x={chartWidth / 2} y={chartHeight - 8} textAnchor="middle" fill="#6b7280" fontSize="12" fontWeight="600">
+          Datum
+        </text>
+        <text x={20} y={chartHeight / 2} textAnchor="middle" fill="#6b7280" fontSize="12" fontWeight="600"
+              transform={`rotate(-90, 20, ${chartHeight / 2})`}>
+          Liquidität (€)
+        </text>
+        
+        <path d={pathData} fill="none" stroke="url(#lineGradient)" strokeWidth="3" 
+              strokeLinecap="round" strokeLinejoin="round" />
+        
+        {dataPoints.map((point, index) => {
+          const x = scaleX(index);
+          const y = scaleY(point.balance);
+          const color = point.balance >= 0 ? '#10b981' : point.balance >= -100000 ? '#f59e0b' : '#dc2626';
+          
+          return (
+            <g key={index}>
+              <circle cx={x} cy={y} r="5" fill={color} stroke="white" strokeWidth="2" />
+              <title>{`${formatDateShort(point.datum)}: ${point.balance.toLocaleString('de-DE', { style: 'currency', currency: 'EUR' })}\n${point.label}`}</title>
+            </g>
+          );
+        })}
+      </svg>
+      
+      <div className="mt-5 flex gap-5 text-xs text-gray-600">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+          <span>Positiv (≥ 0 €)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-orange-500 rounded-full"></div>
+          <span>Warnung (0 bis -100k €)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 bg-red-600 rounded-full"></div>
+          <span>Kritisch (&lt; -100k €)</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function LiquiditaetsPlaner() {
+  const [entries, setEntries] = useState([]);
+  const [activeTab, setActiveTab] = useState('uebersicht');
+  const [buchungstyp, setBuchungstyp] = useState('sammelrechnung');
+  const [zahlungsarten, setZahlungsarten] = useState({
+    sammel: 'einzug', direkt: 'einzug', wieder: 'einzug', gutschrift: 'ueberweisung'
+  });
+  
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [sammelForm, setSammelForm] = useState({ grosshaendler: '', betrag: '', datum: '' });
+  const [direktForm, setDirektForm] = useState({ beschreibung: '', rechnungsnummer: '', betrag: '', datum: '' });
+  const [gutschriftForm, setGutschriftForm] = useState({ beschreibung: '', betrag: '', datum: '' });
+  const [wiederForm, setWiederForm] = useState({ beschreibung: '', betrag: '', startdatum: '', enddatum: '', wiederholung: 'monatlich', buchungstag: 'datum' });
+  
+  const [kontostand, setKontostand] = useState(0);
+  const [bargeldkassen, setBargeldkassen] = useState({
+    montag: 0, dienstag: 0, mittwoch: 0, donnerstag: 0, freitag: 0, samstag: 0
+  });
+  const [bargeldAktiv, setBargeldAktiv] = useState(false);
+  const [showBargeldDialog, setShowBargeldDialog] = useState(false);
+  
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  
+  const [zeitraum, setZeitraum] = useState('aktuell_naechster');
+  const [customFilterVon, setCustomFilterVon] = useState('');
+  const [customFilterBis, setCustomFilterBis] = useState('');
+
+  useEffect(() => {
+    const saved = localStorage.getItem('liquiditaetsplaner');
+    if (saved) {
+      const data = JSON.parse(saved);
+      setEntries(data.entries || []);
+      setKontostand(data.kontostand || 0);
+      setBargeldkassen(data.bargeldkassen || {
+        montag: 0, dienstag: 0, mittwoch: 0, donnerstag: 0, freitag: 0, samstag: 0
+      });
+      setBargeldAktiv(data.bargeldAktiv || false);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('liquiditaetsplaner', JSON.stringify({ 
+      entries, 
+      kontostand, 
+      bargeldkassen,
+      bargeldAktiv
+    }));
+  }, [entries, kontostand, bargeldkassen, bargeldAktiv]);
+
+  const updateSammelrechnungDate = (grosshaendler) => {
+    const today = new Date();
+    let date = new Date();
+    
+    if (['Noweda', 'Sanacorp', 'Alliance'].includes(grosshaendler)) {
+      date.setDate(15);
+      if (date < today) date.setMonth(date.getMonth() + 1);
+      setSammelForm(prev => ({ ...prev, datum: date.toISOString().split('T')[0] }));
+      setZahlungsarten(prev => ({ ...prev, sammel: 'einzug' }));
+    } else if (grosshaendler === 'Phoenix') {
+      date.setDate(10);
+      if (date < today) date.setMonth(date.getMonth() + 1);
+      setSammelForm(prev => ({ ...prev, datum: date.toISOString().split('T')[0] }));
+    }
+  };
+
+  const addSammelrechnung = () => {
+    if (!sammelForm.grosshaendler || !sammelForm.betrag || !sammelForm.datum) {
+      alert('Bitte alle Felder ausfüllen!');
+      return;
+    }
+    
+    if (editingEntry) {
+      setEntries(entries.map(e => 
+        e.id === editingEntry.id 
+          ? { ...e, beschreibung: 'Sammelrechnung ' + sammelForm.grosshaendler, grosshaendler: sammelForm.grosshaendler, betrag: parseFloat(sammelForm.betrag), datum: sammelForm.datum, zahlungsart: zahlungsarten.sammel }
+          : e
+      ));
+      setEditingEntry(null);
+    } else {
+      setEntries([...entries, {
+        id: Date.now(),
+        typ: 'sammelrechnung',
+        beschreibung: 'Sammelrechnung ' + sammelForm.grosshaendler,
+        grosshaendler: sammelForm.grosshaendler,
+        betrag: parseFloat(sammelForm.betrag),
+        datum: sammelForm.datum,
+        zahlungsart: zahlungsarten.sammel,
+        rechnungsnummer: ''
+      }]);
+    }
+    
+    setSammelForm({ grosshaendler: '', betrag: '', datum: '' });
+  };
+
+  const addDirektbestellung = () => {
+    if (!direktForm.beschreibung || !direktForm.rechnungsnummer || !direktForm.betrag || !direktForm.datum) {
+      alert('Bitte alle Felder ausfüllen!');
+      return;
+    }
+    
+    if (editingEntry) {
+      setEntries(entries.map(e => 
+        e.id === editingEntry.id 
+          ? { ...e, beschreibung: direktForm.beschreibung, rechnungsnummer: direktForm.rechnungsnummer, betrag: parseFloat(direktForm.betrag), datum: direktForm.datum, zahlungsart: zahlungsarten.direkt }
+          : e
+      ));
+      setEditingEntry(null);
+    } else {
+      setEntries([...entries, {
+        id: Date.now(),
+        typ: 'direkt',
+        beschreibung: direktForm.beschreibung,
+        rechnungsnummer: direktForm.rechnungsnummer,
+        betrag: parseFloat(direktForm.betrag),
+        datum: direktForm.datum,
+        zahlungsart: zahlungsarten.direkt,
+        grosshaendler: ''
+      }]);
+    }
+    
+    setDirektForm({ beschreibung: '', rechnungsnummer: '', betrag: '', datum: '' });
+  };
+
+  const addGutschrift = () => {
+    if (!gutschriftForm.beschreibung || !gutschriftForm.betrag || !gutschriftForm.datum) {
+      alert('Bitte alle Felder ausfüllen!');
+      return;
+    }
+    
+    if (editingEntry) {
+      setEntries(entries.map(e => 
+        e.id === editingEntry.id 
+          ? { ...e, beschreibung: gutschriftForm.beschreibung, betrag: parseFloat(gutschriftForm.betrag), datum: gutschriftForm.datum, zahlungsart: zahlungsarten.gutschrift }
+          : e
+      ));
+      setEditingEntry(null);
+    } else {
+      setEntries([...entries, {
+        id: Date.now(),
+        typ: 'gutschrift',
+        beschreibung: gutschriftForm.beschreibung,
+        betrag: parseFloat(gutschriftForm.betrag),
+        datum: gutschriftForm.datum,
+        zahlungsart: zahlungsarten.gutschrift,
+        rechnungsnummer: '',
+        grosshaendler: ''
+      }]);
+    }
+    
+    setGutschriftForm({ beschreibung: '', betrag: '', datum: '' });
+  };
+
+  const addWiederkehrend = () => {
+    if (!wiederForm.beschreibung || !wiederForm.betrag || !wiederForm.startdatum) {
+      alert('Bitte Beschreibung, Betrag und Startdatum ausfüllen!');
+      return;
+    }
+    
+    if (editingEntry && editingEntry.gruppenId) {
+      const oldGruppenId = editingEntry.gruppenId;
+      setEntries(entries.filter(e => e.gruppenId !== oldGruppenId));
+    }
+    
+    const startDate = new Date(wiederForm.startdatum);
+    const newEntries = [];
+    const gruppenId = editingEntry?.gruppenId || Date.now();
+    
+    const getLastBankingDay = (year, month) => {
+      let lastDay = new Date(year, month + 1, 0);
+      while (lastDay.getDay() === 0 || lastDay.getDay() === 6) {
+        lastDay.setDate(lastDay.getDate() - 1);
+      }
+      return lastDay;
+    };
+    
+    const getBookingDate = (baseDate) => {
+      const year = baseDate.getFullYear();
+      const month = baseDate.getMonth();
+      
+      if (wiederForm.buchungstag === 'erster') {
+        return new Date(year, month, 1);
+      } else if (wiederForm.buchungstag === 'letzter') {
+        return getLastBankingDay(year, month);
+      } else {
+        return new Date(baseDate);
+      }
+    };
+    
+    if (!wiederForm.enddatum) {
+      let currentDate = new Date(startDate);
+      const anzahlBuchungen = wiederForm.wiederholung === 'monatlich' ? 24 : 8;
+      
+      for (let i = 0; i < anzahlBuchungen; i++) {
+        const bookingDate = getBookingDate(currentDate);
+        
+        newEntries.push({
+          id: Date.now() + i,
+          typ: 'wiederkehrend',
+          beschreibung: wiederForm.beschreibung,
+          betrag: parseFloat(wiederForm.betrag),
+          datum: bookingDate.toISOString().split('T')[0],
+          zahlungsart: zahlungsarten.wieder,
+          rechnungsnummer: '',
+          grosshaendler: '',
+          wiederholung: wiederForm.wiederholung,
+          buchungstag: wiederForm.buchungstag,
+          gruppenId: gruppenId,
+          bisAufWiderruf: true
+        });
+        
+        if (wiederForm.wiederholung === 'monatlich') {
+          currentDate = new Date(currentDate);
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        } else {
+          currentDate = new Date(currentDate);
+          currentDate.setMonth(currentDate.getMonth() + 3);
+        }
+      }
+    } else {
+      const endDate = new Date(wiederForm.enddatum);
+      
+      if (endDate < startDate) {
+        alert('Enddatum muss nach Startdatum liegen!');
+        return;
+      }
+      
+      let currentDate = new Date(startDate);
+      let counter = 0;
+      
+      while (currentDate <= endDate) {
+        const bookingDate = getBookingDate(currentDate);
+        
+        if (bookingDate <= endDate) {
+          newEntries.push({
+            id: Date.now() + counter,
+            typ: 'wiederkehrend',
+            beschreibung: wiederForm.beschreibung,
+            betrag: parseFloat(wiederForm.betrag),
+            datum: bookingDate.toISOString().split('T')[0],
+            zahlungsart: zahlungsarten.wieder,
+            rechnungsnummer: '',
+            grosshaendler: '',
+            wiederholung: wiederForm.wiederholung,
+            buchungstag: wiederForm.buchungstag,
+            gruppenId: gruppenId,
+            bisAufWiderruf: false
+          });
+        }
+        
+        if (wiederForm.wiederholung === 'monatlich') {
+          currentDate = new Date(currentDate);
+          currentDate.setMonth(currentDate.getMonth() + 1);
+        } else {
+          currentDate = new Date(currentDate);
+          currentDate.setMonth(currentDate.getMonth() + 3);
+        }
+        counter++;
+      }
+    }
+    
+    setEntries([...entries, ...newEntries]);
+    setWiederForm({ beschreibung: '', betrag: '', startdatum: '', enddatum: '', wiederholung: 'monatlich', buchungstag: 'datum' });
+    setEditingEntry(null);
+  };
+
+  const editEntry = (entry) => {
+    setEditingEntry(entry);
+    
+    if (entry.typ === 'sammelrechnung') {
+      setBuchungstyp('sammelrechnung');
+      setSammelForm({ grosshaendler: entry.grosshaendler, betrag: entry.betrag.toString(), datum: entry.datum });
+      setZahlungsarten(prev => ({ ...prev, sammel: entry.zahlungsart }));
+    } else if (entry.typ === 'direkt') {
+      setBuchungstyp('direkt');
+      setDirektForm({ beschreibung: entry.beschreibung, rechnungsnummer: entry.rechnungsnummer, betrag: entry.betrag.toString(), datum: entry.datum });
+      setZahlungsarten(prev => ({ ...prev, direkt: entry.zahlungsart }));
+    } else if (entry.typ === 'gutschrift') {
+      setBuchungstyp('gutschrift');
+      setGutschriftForm({ beschreibung: entry.beschreibung, betrag: entry.betrag.toString(), datum: entry.datum });
+      setZahlungsarten(prev => ({ ...prev, gutschrift: entry.zahlungsart }));
+    } else if (entry.typ === 'wiederkehrend') {
+      setBuchungstyp('wiederkehrend');
+      const gruppenBuchungen = entries.filter(e => e.gruppenId === entry.gruppenId);
+      const sortiert = gruppenBuchungen.sort((a, b) => new Date(a.datum) - new Date(b.datum));
+      setWiederForm({
+        beschreibung: entry.beschreibung,
+        betrag: entry.betrag.toString(),
+        startdatum: sortiert[0].datum,
+        enddatum: entry.bisAufWiderruf ? '' : sortiert[sortiert.length - 1].datum,
+        wiederholung: entry.wiederholung,
+        buchungstag: entry.buchungstag || 'datum'
+      });
+      setZahlungsarten(prev => ({ ...prev, wieder: entry.zahlungsart }));
+    }
+    
+    setActiveTab('eingabe');
+  };
+
+  const cancelEdit = () => {
+    setEditingEntry(null);
+    setSammelForm({ grosshaendler: '', betrag: '', datum: '' });
+    setDirektForm({ beschreibung: '', rechnungsnummer: '', betrag: '', datum: '' });
+    setGutschriftForm({ beschreibung: '', betrag: '', datum: '' });
+  };
+
+  const deleteEntry = (entry) => {
+    if (entry.istBargeld) {
+      alert('Automatische Bargeld-Buchungen können nicht einzeln gelöscht werden. Deaktiviere die Bargeldkassen-Funktion.');
+      return;
+    }
+    
+    if (entry.typ === 'wiederkehrend' && entry.gruppenId) {
+      const gruppenBuchungen = entries.filter(e => e.gruppenId === entry.gruppenId);
+      
+      if (gruppenBuchungen.length > 1) {
+        const antwort = window.confirm(
+          `Diese Buchung ist Teil einer wiederkehrenden Serie (${gruppenBuchungen.length} Buchungen).\n\nMöchtest du die GESAMTE Serie löschen?\n\nOK = Gesamte Serie löschen\nAbbrechen = Nur diese einzelne Buchung löschen`
+        );
+        
+        if (antwort) {
+          setEntries(entries.filter(e => e.gruppenId !== entry.gruppenId));
+        } else {
+          setEntries(entries.filter(e => e.id !== entry.id));
+        }
+      } else {
+        if (window.confirm('Buchung wirklich löschen?')) {
+          setEntries(entries.filter(e => e.id !== entry.id));
+        }
+      }
+    } else {
+      if (window.confirm('Buchung wirklich löschen?')) {
+        setEntries(entries.filter(e => e.id !== entry.id));
+      }
+    }
+  };
+
+  const formatCurrency = (amount) => new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(amount);
+  const formatDate = (dateString) => new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(dateString));
+
+  // Google Sheets Sync-Funktionen
+  const loadFromGoogleSheets = async () => {
+    setIsSyncing(true);
+    try {
+      const response = await fetch(`${GOOGLE_SHEETS_API_URL}?action=getData`);
+      const data = await response.json();
+      
+      if (data.success) {
+        setEntries(data.entries || []);
+        setKontostand(data.kontostand || 0);
+        setBargeldkassen(data.bargeldkassen || {
+          montag: 0, dienstag: 0, mittwoch: 0, donnerstag: 0, freitag: 0, samstag: 0
+        });
+        setBargeldAktiv(data.bargeldAktiv || false);
+        setLastSync(new Date());
+        alert('✅ Daten erfolgreich von Google Sheets geladen!');
+      } else {
+        alert('❌ Fehler beim Laden: ' + data.error);
+      }
+    } catch (error) {
+      alert('❌ Verbindungsfehler: ' + error.message);
+      console.error('Sync Error:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const saveToGoogleSheets = async () => {
+    setIsSyncing(true);
+    try {
+      const response = await fetch(`${GOOGLE_SHEETS_API_URL}?action=saveData`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+        },
+        body: JSON.stringify({
+          entries: entries,
+          bargeldkassen: bargeldkassen,
+          bargeldAktiv: bargeldAktiv,
+          kontostand: kontostand
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setLastSync(new Date());
+        alert('✅ Daten erfolgreich zu Google Sheets gespeichert!');
+      } else {
+        alert('❌ Fehler beim Speichern: ' + data.error);
+      }
+    } catch (error) {
+      alert('❌ Verbindungsfehler: ' + error.message);
+      console.error('Sync Error:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Feiertags-Funktionen
+  const getEasterDate = (year) => {
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31) - 1;
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(year, month, day);
+  };
+
+  const getHolidays = (year) => {
+    const holidays = [];
+    holidays.push(new Date(year, 0, 1));
+    holidays.push(new Date(year, 0, 6));
+    holidays.push(new Date(year, 4, 1));
+    holidays.push(new Date(year, 9, 3));
+    holidays.push(new Date(year, 10, 1));
+    holidays.push(new Date(year, 11, 25));
+    holidays.push(new Date(year, 11, 26));
+    
+    const easter = getEasterDate(year);
+    holidays.push(new Date(easter.getTime() - 2 * 24 * 60 * 60 * 1000));
+    holidays.push(new Date(easter.getTime() + 1 * 24 * 60 * 60 * 1000));
+    holidays.push(new Date(easter.getTime() + 39 * 24 * 60 * 60 * 1000));
+    holidays.push(new Date(easter.getTime() + 50 * 24 * 60 * 60 * 1000));
+    holidays.push(new Date(easter.getTime() + 60 * 24 * 60 * 60 * 1000));
+    
+    return holidays.map(d => d.toISOString().split('T')[0]);
+  };
+
+  const isHoliday = (dateString) => {
+    const date = new Date(dateString);
+    return getHolidays(date.getFullYear()).includes(dateString);
+  };
+
+  // Bargeld-Einträge generieren
+  const getBargeldEntries = () => {
+    if (!bargeldAktiv) return [];
+    
+    const virtuelleEntries = [];
+    const wochentagMap = ['sonntag', 'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag'];
+    
+    const heute = new Date();
+    for (let i = 0; i < 90; i++) {
+      const datum = new Date(heute);
+      datum.setDate(heute.getDate() + i);
+      const dateString = datum.toISOString().split('T')[0];
+      const wochentag = wochentagMap[datum.getDay()];
+      const betrag = parseFloat(bargeldkassen[wochentag]) || 0;
+      
+      if (betrag > 0 && wochentag !== 'sonntag' && !isHoliday(dateString)) {
+        virtuelleEntries.push({
+          id: `bargeld-${dateString}`,
+          typ: 'gutschrift',
+          beschreibung: `Bargeld ${wochentag.charAt(0).toUpperCase() + wochentag.slice(1)}`,
+          betrag: betrag,
+          datum: dateString,
+          zahlungsart: 'bar',
+          rechnungsnummer: '',
+          grosshaendler: '',
+          istBargeld: true
+        });
+      }
+    }
+    
+    return virtuelleEntries;
+  };
+
+  const alleEntries = [...entries, ...getBargeldEntries()];
+
+  // Prognose wann Schwellenwerte erreicht werden
+  const getSchwellenwertPrognose = () => {
+    const sortedEntries = [...alleEntries].sort((a, b) => new Date(a.datum) - new Date(b.datum));
+    let balance = kontostand;
+    let datum100k = null;
+    let datum120k = null;
+    
+    for (const entry of sortedEntries) {
+      balance -= (entry.typ === 'gutschrift' ? -entry.betrag : entry.betrag);
+      
+      if (!datum100k && balance < -100000) {
+        datum100k = entry.datum;
+      }
+      if (!datum120k && balance < -120000) {
+        datum120k = entry.datum;
+        break;
+      }
+    }
+    
+    return { datum100k, datum120k };
+  };
+
+  const { datum100k, datum120k } = getSchwellenwertPrognose();
+
+  const today = new Date();
+  const in30Days = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const in90Days = new Date(today.getTime() + 90 * 24 * 60 * 60 * 1000);
+  
+  const total30 = alleEntries
+    .filter(e => new Date(e.datum) <= in30Days && new Date(e.datum) >= today)
+    .reduce((sum, e) => sum + (e.typ === 'gutschrift' ? -e.betrag : e.betrag), 0);
+  
+  const total90 = alleEntries
+    .filter(e => new Date(e.datum) <= in90Days && new Date(e.datum) >= today)
+    .reduce((sum, e) => sum + (e.typ === 'gutschrift' ? -e.betrag : e.betrag), 0);
+
+  const getZeitraumDates = () => {
+    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const nextMonthEnd = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+    
+    switch(zeitraum) {
+      case 'aktuell_naechster':
+        return { von: currentMonthStart.toISOString().split('T')[0], bis: nextMonthEnd.toISOString().split('T')[0] };
+      case 'aktueller_monat':
+        const currentMonthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        return { von: currentMonthStart.toISOString().split('T')[0], bis: currentMonthEnd.toISOString().split('T')[0] };
+      case '30_tage':
+        return { von: today.toISOString().split('T')[0], bis: in30Days.toISOString().split('T')[0] };
+      case '90_tage':
+        return { von: today.toISOString().split('T')[0], bis: in90Days.toISOString().split('T')[0] };
+      case 'custom':
+        return { von: customFilterVon, bis: customFilterBis };
+      case 'alle':
+      default:
+        return { von: '', bis: '' };
+    }
+  };
+
+  const { von: filterVon, bis: filterBis } = getZeitraumDates();
+  let filteredEntries = [...alleEntries].sort((a, b) => new Date(a.datum) - new Date(b.datum));
+  if (filterVon) filteredEntries = filteredEntries.filter(e => e.datum >= filterVon);
+  if (filterBis) filteredEntries = filteredEntries.filter(e => e.datum <= filterBis);
+
+  const grouped = {};
+  [...alleEntries].sort((a, b) => new Date(a.datum) - new Date(b.datum)).forEach(entry => {
+    if (!grouped[entry.datum]) grouped[entry.datum] = [];
+    grouped[entry.datum].push(entry);
+  });
+
+  const inputClass = "w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-none transition-all";
+  const labelClass = "block text-sm font-semibold text-gray-700 mb-2";
+  const buttonPrimary = "w-full bg-emerald-600 text-white px-5 py-3 rounded-lg font-semibold hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-200 transition-all shadow-sm hover:shadow-md";
+  const buttonSecondary = "flex-1 px-4 py-2.5 rounded-lg font-medium bg-white border-2 border-gray-300 text-gray-700 hover:border-emerald-500 hover:bg-emerald-50 transition-all";
+  const buttonSecondaryActive = "flex-1 px-4 py-2.5 rounded-lg font-semibold bg-emerald-600 text-white border-2 border-emerald-600 shadow-sm";
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 py-8 px-4">
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden mb-6">
+          <div className="bg-gradient-to-r from-emerald-600 to-emerald-700 px-8 py-6">
+            <h1 className="text-3xl font-bold text-white">Liquiditätsplaner</h1>
+            <p className="text-emerald-100 text-sm mt-1">Engel-Apotheke Trossingen</p>
+          </div>
+
+          <div className="border-b border-gray-200 bg-gray-50 px-6">
+            <div className="flex gap-2">
+              {[['uebersicht', 'Dashboard'], ['eingabe', 'Neue Buchung'], ['timeline', 'Timeline']].map(([tab, label]) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveTab(tab)}
+                  className={`px-6 py-4 font-semibold border-b-2 transition-all ${
+                    activeTab === tab
+                      ? 'border-emerald-600 text-emerald-600 bg-white'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="p-8">
+            {activeTab === 'uebersicht' && (
+              <div>
+                <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
+                  <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
+                  <div className="flex gap-3 flex-wrap">
+                    <button 
+                      onClick={loadFromGoogleSheets}
+                      disabled={isSyncing}
+                      className="bg-green-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed focus:outline-none focus:ring-4 focus:ring-green-200 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      {isSyncing ? 'Lädt...' : 'Von Sheets laden'}
+                    </button>
+                    
+                    <button 
+                      onClick={saveToGoogleSheets}
+                      disabled={isSyncing}
+                      className="bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed focus:outline-none focus:ring-4 focus:ring-blue-200 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                      {isSyncing ? 'Speichert...' : 'Zu Sheets speichern'}
+                    </button>
+                    
+                    <button 
+                      onClick={() => setShowBargeldDialog(true)}
+                      className="bg-purple-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-purple-700 focus:outline-none focus:ring-4 focus:ring-purple-200 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      Bargeldkassen
+                    </button>
+                    
+                    <button 
+                      onClick={() => setActiveTab('eingabe')}
+                      className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-200 transition-all shadow-sm hover:shadow-md flex items-center gap-2"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Neue Buchung
+                    </button>
+                  </div>
+                </div>
+
+                {lastSync && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800 flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Zuletzt synchronisiert: {lastSync.toLocaleString('de-DE')}
+                  </div>
+                )}
+
+                <LiquiditaetsChart entries={filteredEntries} kontostand={kontostand} />
+
+                {(datum100k || datum120k) && (
+                  <div className="my-6 p-5 bg-gradient-to-r from-red-50 to-orange-50 border-l-4 border-red-500 rounded-lg">
+                    <div className="flex items-start gap-3">
+                      <svg className="w-6 h-6 text-red-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <div className="flex-1">
+                        <h4 className="font-bold text-red-900 mb-2">⚠️ Schwellenwert-Prognose</h4>
+                        <div className="space-y-1 text-sm">
+                          {datum100k && (
+                            <p className="text-orange-800">
+                              <span className="font-semibold">-100.000 € Schwelle:</span> voraussichtlich am <span className="font-bold">{formatDate(datum100k)}</span>
+                            </p>
+                          )}
+                          {datum120k && (
+                            <p className="text-red-800">
+                              <span className="font-semibold">-120.000 € Schwelle:</span> voraussichtlich am <span className="font-bold">{formatDate(datum120k)}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mb-6 p-6 bg-gradient-to-br from-slate-50 to-slate-100 border-2 border-slate-200 rounded-xl">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-1 h-8 bg-slate-700 rounded-full"></div>
+                    <h3 className="text-lg font-bold text-slate-900">Aktuelle Liquidität</h3>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <p className="text-sm text-slate-600 mb-1">Aktueller Kontostand</p>
+                      <p className={`text-4xl font-bold ${kontostand >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {formatCurrency(kontostand)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-slate-600 mb-1">Prognostiziert in 30 Tagen</p>
+                      <p className={`text-4xl font-bold ${(kontostand - total30) >= 0 ? 'text-green-600' : (kontostand - total30) >= -100000 ? 'text-orange-500' : 'text-red-600'}`}>
+                        {formatCurrency(kontostand - total30)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-8">
+                  {[
+                    ['Verbindlichkeiten (30 Tage)', total30],
+                    ['Verbindlichkeiten (90 Tage)', total90],
+                    ['Anzahl Buchungen', alleEntries.length, true]
+                  ].map(([title, value, isCount], idx) => (
+                    <div key={idx} className="bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow">
+                      <h3 className="text-xs font-semibold text-emerald-800 mb-2 uppercase tracking-wide">{title}</h3>
+                      <div className="text-3xl font-bold text-emerald-900">{isCount ? value : formatCurrency(value)}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {alleEntries.length > 0 && (
+                  <div className="mb-8">
+                    <h3 className="text-lg font-bold text-gray-900 mb-4">Nächste Fälligkeiten (7 Tage)</h3>
+                    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                      {(() => {
+                        const sevenDays = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+                        const upcoming = alleEntries
+                          .filter(e => {
+                            const entryDate = new Date(e.datum);
+                            return entryDate >= today && entryDate <= sevenDays;
+                          })
+                          .sort((a, b) => new Date(a.datum) - new Date(b.datum))
+                          .slice(0, 5);
+                        
+                        if (upcoming.length === 0) {
+                          return (
+                            <div className="p-8 text-center text-gray-400">
+                              <div className="text-4xl mb-2">✓</div>
+                              <p className="font-medium">Keine Zahlungen in den nächsten 7 Tagen</p>
+                            </div>
+                          );
+                        }
+                        
+                        return (
+                          <table className="w-full">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                              <tr>
+                                <th className="px-5 py-3 text-left text-xs font-bold text-gray-700 uppercase">Datum</th>
+                                <th className="px-5 py-3 text-left text-xs font-bold text-gray-700 uppercase">Beschreibung</th>
+                                <th className="px-5 py-3 text-right text-xs font-bold text-gray-700 uppercase">Betrag</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200">
+                              {upcoming.map(entry => (
+                                <tr key={entry.id} className="hover:bg-gray-50">
+                                  <td className="px-5 py-3 text-gray-700 font-medium">{formatDate(entry.datum)}</td>
+                                  <td className="px-5 py-3 text-gray-700">
+                                    {entry.beschreibung}
+                                    {entry.istBargeld && <span className="ml-2 text-xs text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded">(auto)</span>}
+                                  </td>
+                                  <td className="px-5 py-3 text-right">
+                                    <span className={`font-bold ${entry.typ === 'gutschrift' ? 'text-green-600' : 'text-red-600'}`}>
+                                      {entry.typ === 'gutschrift' ? '+' : '−'}{formatCurrency(entry.betrag)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                <LiquiditaetsChart entries={filteredEntries} kontostand={kontostand} />
+
+                <div className="mt-8 mb-6 p-6 bg-gray-50 border border-gray-200 rounded-xl">
+                  <label className="block text-sm font-bold text-gray-700 mb-4">Zeitraum filtern</label>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+                    {[
+                      ['aktuell_naechster', 'Aktuell + Nächster'],
+                      ['aktueller_monat', 'Aktueller Monat'],
+                      ['30_tage', '30 Tage'],
+                      ['90_tage', '90 Tage'],
+                      ['alle', 'Alle'],
+                      ['custom', 'Benutzerdefiniert']
+                    ].map(([value, label]) => (
+                      <button key={value} onClick={() => setZeitraum(value)} className={zeitraum === value ? buttonSecondaryActive : buttonSecondary}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  
+                  {zeitraum === 'custom' && (
+                    <div className="grid grid-cols-2 gap-4 mt-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-2">Von (Datum)</label>
+                        <input type="date" value={customFilterVon} onChange={(e) => setCustomFilterVon(e.target.value)} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-2">Bis (Datum)</label>
+                        <input type="date" value={customFilterBis} onChange={(e) => setCustomFilterBis(e.target.value)} className={inputClass} />
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="mt-4 text-sm text-gray-600">
+                    Angezeigt: <span className="font-bold text-gray-900">{filteredEntries.length}</span> von <span className="font-bold text-gray-900">{alleEntries.length}</span> Buchungen
+                    {bargeldAktiv && <span className="ml-3 text-blue-600 font-semibold">(inkl. {getBargeldEntries().length} Bargeld-Einträge)</span>}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-bold text-gray-900 mb-4">Alle Buchungen</h3>
+                  <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-gray-50 border-b-2 border-gray-200">
+                          <tr>
+                            {['Datum', 'Typ', 'Beschreibung', 'Betrag', 'Aktionen'].map(h => (
+                              <th key={h} className="px-5 py-4 text-left text-xs font-bold text-gray-700 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {filteredEntries.length === 0 ? (
+                            <tr>
+                              <td colSpan="5" className="px-5 py-16 text-center text-gray-400">
+                                <div className="text-5xl mb-3">📊</div>
+                                <div className="font-medium">Keine Buchungen gefunden</div>
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredEntries.map(entry => (
+                              <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-5 py-4 text-gray-700 font-medium whitespace-nowrap">{formatDate(entry.datum)}</td>
+                                <td className="px-5 py-4">
+                                  <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${
+                                    entry.typ === 'sammelrechnung' ? 'bg-purple-100 text-purple-700' :
+                                    entry.typ === 'direkt' ? 'bg-blue-100 text-blue-700' :
+                                    entry.typ === 'gutschrift' ? 'bg-green-100 text-green-700' :
+                                    'bg-orange-100 text-orange-700'
+                                  }`}>
+                                    {entry.typ === 'sammelrechnung' ? 'Sammel' :
+                                     entry.typ === 'direkt' ? 'Rechnung' :
+                                     entry.typ === 'gutschrift' ? 'Gutschrift' : 'Wiederk. Rechnung'}
+                                  </span>
+                                </td>
+                                <td className="px-5 py-4 text-gray-700">
+                                  {entry.beschreibung}
+                                  {entry.istBargeld && <span className="ml-2 text-xs text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded whitespace-nowrap">(automatisch)</span>}
+                                  {entry.bisAufWiderruf && <span className="ml-2 text-xs text-emerald-600 font-semibold bg-emerald-50 px-2 py-0.5 rounded whitespace-nowrap">(unbefristet)</span>}
+                                </td>
+                                <td className={`px-5 py-4 font-bold whitespace-nowrap ${entry.typ === 'gutschrift' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {entry.typ === 'gutschrift' ? '+' : '−'}{formatCurrency(entry.betrag)}
+                                </td>
+                                <td className="px-5 py-4">
+                                  {!entry.istBargeld && (
+                                    <div className="flex gap-2">
+                                      <button onClick={() => editEntry(entry)} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Bearbeiten">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                      </button>
+                                      <button onClick={() => deleteEntry(entry)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Löschen">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'eingabe' && (
+              <div className="max-w-4xl">
+                <h2 className="text-xl font-bold text-gray-900 mb-6">
+                  {editingEntry ? 'Buchung bearbeiten' : 'Neue Buchung erfassen'}
+                </h2>
+                
+                {editingEntry && (
+                  <div className="mb-6 p-4 bg-blue-50 border-l-4 border-blue-500 rounded-lg flex justify-between items-center">
+                    <div>
+                      <p className="font-semibold text-blue-900">Bearbeitungsmodus aktiv</p>
+                      <p className="text-sm text-blue-700 mt-0.5">{editingEntry.beschreibung}</p>
+                    </div>
+                    <button onClick={cancelEdit} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                      Abbrechen
+                    </button>
+                  </div>
+                )}
+                
+                {!editingEntry && (
+                  <div className="mb-8">
+                    <label className={labelClass}>Buchungstyp wählen</label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        ['sammelrechnung', 'Sammelrechnung'],
+                        ['direkt', 'Rechnung'],
+                        ['gutschrift', 'Gutschrift'],
+                        ['wiederkehrend', 'Wiederkehrende Rechnung']
+                      ].map(([value, label]) => (
+                        <button 
+                          key={value}
+                          onClick={() => setBuchungstyp(value)} 
+                          className={value === 'gutschrift' && buchungstyp === value 
+                            ? "flex-1 px-4 py-3 rounded-lg font-semibold bg-green-600 text-white border-2 border-green-600 shadow-sm"
+                            : value === 'gutschrift'
+                            ? "flex-1 px-4 py-3 rounded-lg font-medium bg-white border-2 border-gray-300 text-gray-700 hover:border-green-500 hover:bg-green-50 transition-all"
+                            : buchungstyp === value ? buttonSecondaryActive : buttonSecondary
+                          }
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {buchungstyp === 'sammelrechnung' && (
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                      <div>
+                        <label className={labelClass}>Großhändler</label>
+                        <select value={sammelForm.grosshaendler} onChange={(e) => { setSammelForm({ ...sammelForm, grosshaendler: e.target.value }); updateSammelrechnungDate(e.target.value); }} className={inputClass}>
+                          <option value="">Bitte wählen...</option>
+                          <option value="Noweda">Noweda</option>
+                          <option value="Sanacorp">Sanacorp</option>
+                          <option value="Alliance">Alliance</option>
+                          <option value="Phoenix">Phoenix</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Betrag (€)</label>
+                        <input type="number" step="0.01" value={sammelForm.betrag} onChange={(e) => setSammelForm({ ...sammelForm, betrag: e.target.value })} placeholder="0,00" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Fälligkeitsdatum</label>
+                        <input type="date" value={sammelForm.datum} onChange={(e) => setSammelForm({ ...sammelForm, datum: e.target.value })} className={inputClass} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Zahlungsart</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, sammel: 'einzug' })} className={zahlungsarten.sammel === 'einzug' ? buttonSecondaryActive : buttonSecondary}>Lastschrift (Einzug)</button>
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, sammel: 'ueberweisung' })} className={zahlungsarten.sammel === 'ueberweisung' ? buttonSecondaryActive : buttonSecondary}>Überweisung</button>
+                      </div>
+                    </div>
+                    <button onClick={addSammelrechnung} className={buttonPrimary}>
+                      {editingEntry ? '✓ Aktualisieren' : '+ Hinzufügen'}
+                    </button>
+                  </div>
+                )}
+
+                {buchungstyp === 'direkt' && (
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div>
+                        <label className={labelClass}>Lieferant / Beschreibung</label>
+                        <input type="text" value={direktForm.beschreibung} onChange={(e) => setDirektForm({ ...direktForm, beschreibung: e.target.value })} placeholder="z.B. Pharma GmbH" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Rechnungsnummer</label>
+                        <input type="text" value={direktForm.rechnungsnummer} onChange={(e) => setDirektForm({ ...direktForm, rechnungsnummer: e.target.value })} placeholder="RE-2025-001" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Betrag (€)</label>
+                        <input type="number" step="0.01" value={direktForm.betrag} onChange={(e) => setDirektForm({ ...direktForm, betrag: e.target.value })} placeholder="0,00" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Fälligkeitsdatum</label>
+                        <input type="date" value={direktForm.datum} onChange={(e) => setDirektForm({ ...direktForm, datum: e.target.value })} className={inputClass} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Zahlungsart</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, direkt: 'einzug' })} className={zahlungsarten.direkt === 'einzug' ? buttonSecondaryActive : buttonSecondary}>Lastschrift (Einzug)</button>
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, direkt: 'ueberweisung' })} className={zahlungsarten.direkt === 'ueberweisung' ? buttonSecondaryActive : buttonSecondary}>Überweisung</button>
+                      </div>
+                    </div>
+                    <button onClick={addDirektbestellung} className={buttonPrimary}>
+                      {editingEntry ? '✓ Aktualisieren' : '+ Hinzufügen'}
+                    </button>
+                  </div>
+                )}
+
+                {buchungstyp === 'gutschrift' && (
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                      <div className="col-span-2">
+                        <label className={labelClass}>Beschreibung</label>
+                        <input type="text" value={gutschriftForm.beschreibung} onChange={(e) => setGutschriftForm({ ...gutschriftForm, beschreibung: e.target.value })} placeholder="z.B. Krankenkassen-Abrechnung" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Datum</label>
+                        <input type="date" value={gutschriftForm.datum} onChange={(e) => setGutschriftForm({ ...gutschriftForm, datum: e.target.value })} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Betrag (€)</label>
+                        <input type="number" step="0.01" value={gutschriftForm.betrag} onChange={(e) => setGutschriftForm({ ...gutschriftForm, betrag: e.target.value })} placeholder="0,00" className={inputClass} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Zahlungsart</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, gutschrift: 'ueberweisung' })} className={zahlungsarten.gutschrift === 'ueberweisung' ? buttonSecondaryActive : buttonSecondary}>Überweisung</button>
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, gutschrift: 'einzug' })} className={zahlungsarten.gutschrift === 'einzug' ? buttonSecondaryActive : buttonSecondary}>Lastschrift (Einzug)</button>
+                      </div>
+                    </div>
+                    <button onClick={addGutschrift} className="w-full bg-green-600 text-white px-5 py-3 rounded-lg font-semibold hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-200 transition-all shadow-sm hover:shadow-md">
+                      {editingEntry ? '✓ Aktualisieren' : '+ Gutschrift hinzufügen'}
+                    </button>
+                  </div>
+                )}
+
+                {buchungstyp === 'wiederkehrend' && (
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      <div>
+                        <label className={labelClass}>Beschreibung</label>
+                        <input type="text" value={wiederForm.beschreibung} onChange={(e) => setWiederForm({ ...wiederForm, beschreibung: e.target.value })} placeholder="z.B. Miete, Gehälter" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Betrag (€)</label>
+                        <input type="number" step="0.01" value={wiederForm.betrag} onChange={(e) => setWiederForm({ ...wiederForm, betrag: e.target.value })} placeholder="0,00" className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Startdatum</label>
+                        <input type="date" value={wiederForm.startdatum} onChange={(e) => setWiederForm({ ...wiederForm, startdatum: e.target.value })} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Enddatum (optional für unbefristete Buchungen)</label>
+                        <input type="date" value={wiederForm.enddatum} onChange={(e) => setWiederForm({ ...wiederForm, enddatum: e.target.value })} className={inputClass} placeholder="Leer lassen für unbefristet" />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Wiederholung</label>
+                        <select value={wiederForm.wiederholung} onChange={(e) => setWiederForm({ ...wiederForm, wiederholung: e.target.value })} className={inputClass}>
+                          <option value="monatlich">Monatlich</option>
+                          <option value="quartalsweise">Quartalsweise</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Buchungstag</label>
+                        <select value={wiederForm.buchungstag} onChange={(e) => setWiederForm({ ...wiederForm, buchungstag: e.target.value })} className={inputClass}>
+                          <option value="datum">Tag aus Startdatum übernehmen</option>
+                          <option value="erster">Immer am 1. des Monats</option>
+                          <option value="letzter">Immer am letzten Banktag (Werktag)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Zahlungsart</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, wieder: 'einzug' })} className={zahlungsarten.wieder === 'einzug' ? buttonSecondaryActive : buttonSecondary}>Lastschrift (Einzug)</button>
+                        <button onClick={() => setZahlungsarten({ ...zahlungsarten, wieder: 'ueberweisung' })} className={zahlungsarten.wieder === 'ueberweisung' ? buttonSecondaryActive : buttonSecondary}>Überweisung</button>
+                      </div>
+                    </div>
+                    <button onClick={addWiederkehrend} className={buttonPrimary}>
+                      {editingEntry ? '✓ Aktualisieren' : '+ Hinzufügen'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeTab === 'timeline' && (
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-6">Chronologische Übersicht</h2>
+                
+                <div className="mb-8 max-w-md">
+                  <label className={labelClass}>Aktueller Kontostand (€)</label>
+                  <input 
+                    type="number" 
+                    step="0.01" 
+                    value={kontostand} 
+                    onChange={(e) => setKontostand(parseFloat(e.target.value) || 0)} 
+                    placeholder="0,00" 
+                    className={inputClass} 
+                  />
+                  <p className="text-xs text-gray-500 mt-2">Dein aktueller Kontostand wird als Basis für die Berechnung verwendet</p>
+                </div>
+
+                {alleEntries.length === 0 ? (
+                  <div className="text-center py-20">
+                    <div className="text-6xl mb-4">📅</div>
+                    <p className="text-gray-400 font-medium">Noch keine Buchungen vorhanden</p>
+                    <p className="text-sm text-gray-400 mt-1">Erfasse deine erste Buchung, um die Timeline zu sehen</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {Object.keys(grouped).map(datum => {
+                      const dayEntries = grouped[datum];
+                      const balance = kontostand - alleEntries
+                        .filter(e => new Date(e.datum) <= new Date(datum))
+                        .reduce((sum, e) => sum + (e.typ === 'gutschrift' ? -e.betrag : e.betrag), 0);
+                      
+                      return (
+                        <div key={datum} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                          <div className="bg-gradient-to-r from-emerald-50 to-emerald-100 border-b border-emerald-200 px-6 py-4 flex justify-between items-center">
+                            <div className="font-bold text-emerald-900">{formatDate(datum)}</div>
+                            <div className="text-xs font-semibold text-emerald-700 bg-emerald-200 px-3 py-1 rounded-full">
+                              {dayEntries.length} Buchung{dayEntries.length > 1 ? 'en' : ''}
+                            </div>
+                          </div>
+                          <div className="p-6 space-y-3">
+                            {dayEntries.map(e => (
+                              <div key={e.id} className="flex justify-between items-center py-3 border-b border-gray-100 last:border-0">
+                                <div className="flex-1">
+                                  <span className={`inline-block px-2.5 py-1 rounded-md text-xs font-semibold mr-3 ${
+                                    e.typ === 'sammelrechnung' ? 'bg-purple-100 text-purple-700' :
+                                    e.typ === 'direkt' ? 'bg-blue-100 text-blue-700' :
+                                    e.typ === 'gutschrift' ? 'bg-green-100 text-green-700' :
+                                    'bg-orange-100 text-orange-700'
+                                  }`}>
+                                    {e.typ === 'sammelrechnung' ? 'Sammel' :
+                                     e.typ === 'direkt' ? 'Direkt' :
+                                     e.typ === 'gutschrift' ? 'Gutschrift' : 'Wiederk.'}
+                                  </span>
+                                  <span className="text-gray-800 font-medium">{e.beschreibung}</span>
+                                  {e.istBargeld && <span className="ml-2 text-xs text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded">(auto)</span>}
+                                </div>
+                                <span className={`text-lg font-bold ${e.typ === 'gutschrift' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {e.typ === 'gutschrift' ? '+' : '−'}{formatCurrency(e.betrag)}
+                                </span>
+                              </div>
+                            ))}
+                            <div className="mt-5 pt-5 border-t-2 border-gray-200 flex justify-between items-center">
+                              <span className="text-gray-600 font-semibold">Kontostand nach allen Buchungen</span>
+                              <span className={`text-2xl font-bold ${balance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {formatCurrency(balance)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showBargeldDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex justify-between items-center rounded-t-xl">
+              <h3 className="text-xl font-bold text-white">Durchschnittliche Bargeldkassen</h3>
+              <button 
+                onClick={() => setShowBargeldDialog(false)}
+                className="text-white hover:bg-blue-800 rounded-lg p-2 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-sm text-blue-900">
+                  Trage hier deine durchschnittlichen Bargeldeinnahmen pro Wochentag ein. 
+                  Diese werden automatisch als tägliche Gutschriften berücksichtigt, außer an Feiertagen (Baden-Württemberg).
+                </p>
+              </div>
+              
+              <div className="space-y-4 mb-6">
+                {[
+                  ['montag', 'Montag'],
+                  ['dienstag', 'Dienstag'],
+                  ['mittwoch', 'Mittwoch'],
+                  ['donnerstag', 'Donnerstag'],
+                  ['freitag', 'Freitag'],
+                  ['samstag', 'Samstag']
+                ].map(([key, label]) => (
+                  <div key={key}>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">{label}</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={bargeldkassen[key]} 
+                      onChange={(e) => setBargeldkassen({...bargeldkassen, [key]: parseFloat(e.target.value) || 0})}
+                      className="w-full px-4 py-2.5 bg-white border border-gray-300 rounded-lg text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 focus:outline-none transition-all"
+                      placeholder="0,00 €"
+                    />
+                  </div>
+                ))}
+              </div>
+              
+              <div className="mb-6 flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
+                <input 
+                  type="checkbox" 
+                  id="bargeldAktiv"
+                  checked={bargeldAktiv}
+                  onChange={(e) => setBargeldAktiv(e.target.checked)}
+                  className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+                />
+                <label htmlFor="bargeldAktiv" className="text-sm font-semibold text-gray-700 cursor-pointer">
+                  Bargeldkassen aktivieren (werden automatisch als tägliche Gutschriften berücksichtigt)
+                </label>
+              </div>
+              
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowBargeldDialog(false)}
+                  className="flex-1 bg-emerald-600 text-white px-5 py-3 rounded-lg font-semibold hover:bg-emerald-700 focus:outline-none focus:ring-4 focus:ring-emerald-200 transition-all"
+                >
+                  Speichern & Schließen
+                </button>
+                <button 
+                  onClick={() => {
+                    setBargeldkassen({montag: 0, dienstag: 0, mittwoch: 0, donnerstag: 0, freitag: 0, samstag: 0});
+                    setBargeldAktiv(false);
+                  }}
+                  className="px-5 py-3 bg-gray-200 text-gray-700 rounded-lg font-semibold hover:bg-gray-300 transition-colors"
+                >
+                  Zurücksetzen
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Render
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<LiquiditaetsPlaner />);
+    </script>
+</body>
+</html>
